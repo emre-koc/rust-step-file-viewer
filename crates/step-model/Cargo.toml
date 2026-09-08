@@ -1,0 +1,16 @@
+[package]
+name = "step-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Typed decoders from STEP entities to geometry, topology, units and product records"
+
+[dependencies]
+step-p21.workspace = true
+step-mesh.workspace = true
+glam.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+smallvec.workspace = true

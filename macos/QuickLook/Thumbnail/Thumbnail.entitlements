@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Quick Look hands the extension a sandbox extension for the file it is asked about, so no
+         file-access entitlement of our own is needed. Note the side effect: $HOME points at the
+         extension's container, so the StepView app's mesh cache is invisible here and geometry is
+         always tessellated fresh. -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+</dict>
+</plist>

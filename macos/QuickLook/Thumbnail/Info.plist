@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>StepView Thumbnail</string>
+    <key>CFBundleExecutable</key>
+    <string>StepViewThumbnail</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.dresden.stepview.thumbnail</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>StepViewThumbnail</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+    <!-- Kept in sync with the host app by macos/QuickLook/build_appex.sh. -->
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <!-- pkd will not register an app extension without these; Xcode injects them from the SDK, and
+         macos/QuickLook/build_appex.sh fills DTPlatformVersion / DTSDKName in from `xcrun`. -->
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+    <key>DTPlatformName</key>
+    <string>macosx</string>
+    <key>DTPlatformVersion</key>
+    <string>13.0</string>
+    <key>DTSDKName</key>
+    <string>macosx13.0</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>2026 Dresden Vision</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <!-- Our own exported UTI plus the two Shapr3D types that currently own .step/.stp on
+                 most Macs, so the extension is a candidate whichever app owns the extension. -->
+            <key>QLSupportedContentTypes</key>
+            <array>
+                <string>com.dresden.stepview.step</string>
+                <string>com.shapr3d.step</string>
+                <string>com.shapr3d.stp</string>
+            </array>
+            <key>QLThumbnailMinimumDimension</key>
+            <integer>0</integer>
+        </dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.quicklook.thumbnail</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>StepViewThumbnail.ThumbnailProvider</string>
+    </dict>
+</dict>
+</plist>

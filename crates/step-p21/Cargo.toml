@@ -1,0 +1,20 @@
+[package]
+name = "step-p21"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Fast ISO 10303-21 (STEP Part 21) file indexer and lazy attribute parser"
+
+[dependencies]
+memmap2.workspace = true
+memchr.workspace = true
+fast-float2.workspace = true
+phf.workspace = true
+rayon.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true

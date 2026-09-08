@@ -1,0 +1,23 @@
+[package]
+name = "step-mesh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "B-rep geometry types and tessellator for stepview"
+
+[dependencies]
+glam.workspace = true
+rayon.workspace = true
+spade.workspace = true
+i_triangle.workspace = true
+earcutr.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+approx = "0.5"

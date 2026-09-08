@@ -1,0 +1,20 @@
+[package]
+name = "step-brep"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Assembly tree, colours and B-rep topology extraction from STEP files"
+
+[dependencies]
+step-p21.workspace = true
+step-model.workspace = true
+step-mesh.workspace = true
+glam.workspace = true
+rayon.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true

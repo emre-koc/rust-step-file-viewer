@@ -1,0 +1,4 @@
+target*/
+build/
+*.stpc
+.DS_Store

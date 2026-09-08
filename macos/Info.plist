@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.graphics-design</string>
+    <!-- There is no public.step UTI on macOS; declare our own and also claim the third-party ones
+         that currently own the extension so we appear in "Open With" either way. -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.dresden.stepview.step</string>
+            <key>UTTypeDescription</key>
+            <string>STEP CAD File (ISO 10303-21)</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.plain-text</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>step</string>
+                    <string>stp</string>
+                    <string>p21</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>model/step</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>STEP CAD File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeIconFile</key>
+            <string>AppIcon</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.dresden.stepview.step</string>
+                <string>com.shapr3d.step</string>
+                <string>com.shapr3d.stp</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>step</string>
+                <string>stp</string>
+                <string>p21</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
