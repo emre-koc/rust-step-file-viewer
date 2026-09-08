@@ -1,5 +1,7 @@
 # stepview
 
+![StepView: fast native STEP viewer for Apple Silicon](docs/hero.jpg)
+
 Fast native viewer for STEP (ISO 10303-21, AP203 / AP214 / AP242) files on macOS / Apple Silicon.
 Pure Rust: its own Part 21 parser, its own B-rep tessellator, Metal rendering through wgpu, egui UI.
 No OpenCASCADE.
