@@ -1,0 +1,49 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          [ "${GITHUB_REF_NAME}" = "v${v}" ] || { echo "tag ${GITHUB_REF_NAME} != v${v}"; exit 1; }
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version 0.11.8 --locked
+      - name: Test
+        run: cargo test --workspace --release
+      - name: Build app bundle (with Quick Look extensions)
+        run: macos/build.sh
+      - name: Package DMG and zip
+        run: |
+          v=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          cd build/dist
+          hdiutil create -volname StepView -srcfolder StepView.app -ov -format UDZO -quiet "StepView-${v}-macos-arm64.dmg"
+          ditto -c -k --keepParent StepView.app "StepView-${v}-macos-arm64.zip"
+          shasum -a 256 "StepView-${v}-macos-arm64.dmg" "StepView-${v}-macos-arm64.zip" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StepView-macos-arm64
+          path: |
+            build/dist/*.dmg
+            build/dist/*.zip
+            build/dist/SHA256SUMS.txt
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/dist/*.dmg
+            build/dist/*.zip
+            build/dist/SHA256SUMS.txt
+          generate_release_notes: true

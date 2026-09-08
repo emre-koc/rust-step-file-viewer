@@ -17,6 +17,13 @@ Measured on an M1 Max with a 74 MB Creo AP203 assembly of a carrier board (1.39 
 | headless 1600×1200 render | ~30 ms |
 | warm re-open (mesh cache hit) | ~70 ms |
 
+## Download
+
+Prebuilt builds for Apple Silicon are on the [Releases](https://github.com/emre-koc/rust-step-file-viewer/releases)
+page (`.dmg` or `.zip`). The app is ad-hoc signed, not notarized: on first launch right-click →
+**Open**, or run `xattr -dr com.apple.quarantine /Applications/StepView.app`. Launch it once so Finder
+registers the STEP file types and the Quick Look extensions. Requires macOS 13+.
+
 ## Use
 
 ```
