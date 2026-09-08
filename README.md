@@ -4,7 +4,7 @@ Fast native viewer for STEP (ISO 10303-21, AP203 / AP214 / AP242) files on macOS
 Pure Rust: its own Part 21 parser, its own B-rep tessellator, Metal rendering through wgpu, egui UI.
 No OpenCASCADE.
 
-Measured on an M1 Max with the 74 MB Jetson Orin Nano carrier-board assembly (1.39 M entities,
+Measured on an M1 Max with a 74 MB Creo AP203 assembly of a carrier board (1.39 M entities,
 31,694 faces, 1,285 part instances):
 
 | stage | time |
@@ -88,10 +88,3 @@ stepview    CLI + eframe GUI, progressive background loader
 
 Everything is converted to millimetres at decode time. Faces that cannot be meshed become
 diagnostics (see `stepview info --mesh`), never a failed load.
-
-## Test inputs
-
-The shared STEP files in the workspace root (`../A-114.STEP`, `../JETSON-ORIN-IO-BASE-B/*.stp`,
-`../JetsonOrinNano8GBSingleEthernet.stp`) are referenced in place; override with
-`STEPVIEW_FIXTURES_DIR`. Small generated fixtures live in `tests/fixtures/` (`tools/gen_fixtures.py`).
-Build products go to `target/` and `build/` only.
