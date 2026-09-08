@@ -25,3 +25,9 @@
   class at `applicationWillFinishLaunching` instead of replacing the delegate. There is no `public.step` UTI.
 - GUI viewport = offscreen wgpu texture registered as an egui native texture (no `CallbackTrait`); picking reads
   the renderer's ID attachment at the cursor.
+- Signing: never call `codesign --sign -` directly; source `macos/signing.sh` and use `"${SIGN_FLAGS[@]}"`
+  (`STEPVIEW_SIGN_IDENTITY` switches ad-hoc → Developer ID + hardened runtime + timestamp). Sign inside-out and
+  never `--deep` over the embedded appexes (it strips their sandbox entitlement). `macos/package.sh` = build +
+  sign + notarize (notarytool via the `STEPVIEW_NOTARY_PROFILE` keychain profile) + staple + dmg/zip. Releases
+  are built and published from a Mac with `gh release create`; CI never signs and there is no release workflow.
+  Keep scripts bash 3.2-safe (`/bin/bash`).

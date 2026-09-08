@@ -10,6 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$PWD
+. macos/signing.sh
 
 if [ "${STEPVIEW_NO_QL:-}" = "1" ]; then
   echo "STEPVIEW_NO_QL=1 — skipping Quick Look extensions"
@@ -82,7 +83,7 @@ build_appex() {
     return "$status"
   fi
 
-  codesign --force --sign - \
+  codesign "${SIGN_FLAGS[@]}" \
     --entitlements "$src_dir/$(basename "$src_dir").entitlements" "$bundle"
   codesign --verify --verbose=1 "$bundle" 2>&1 | sed 's/^/    /'
 }
@@ -107,6 +108,6 @@ cp -R "$OUT/StepViewThumbnail.appex" "$OUT/StepViewPreview.appex" "$APP/Contents
 # Sign inside-out and *without* --deep: --deep would re-sign the nested appexes with the outer
 # invocation's options, silently dropping the sandbox entitlement they were just signed with, and
 # pkd then refuses to register them.
-codesign --force --sign - "$APP"
+codesign "${SIGN_FLAGS[@]}" "$APP"
 codesign --verify --deep --verbose=1 "$APP" 2>&1 | sed 's/^/    /'
 echo "embedded both extensions in $APP (version $VERSION)"

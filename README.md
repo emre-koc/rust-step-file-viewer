@@ -20,9 +20,11 @@ Measured on an M1 Max with a 74 MB Creo AP203 assembly of a carrier board (1.39 
 ## Download
 
 Prebuilt builds for Apple Silicon are on the [Releases](https://github.com/emre-koc/rust-step-file-viewer/releases)
-page (`.dmg` or `.zip`). The app is ad-hoc signed, not notarized: on first launch right-click →
-**Open**, or run `xattr -dr com.apple.quarantine /Applications/StepView.app`. Launch it once so Finder
-registers the STEP file types and the Quick Look extensions. Requires macOS 13+.
+page (`.dmg` or `.zip`). Release builds are signed with a Developer ID certificate and notarized by
+Apple, so they open like any other download. (The v0.1.0 build predates that and is ad-hoc signed: on
+first launch right-click → **Open**, or run `xattr -dr com.apple.quarantine /Applications/StepView.app`.)
+Launch the app once so Finder registers the STEP file types and the Quick Look extensions. Requires
+macOS 13+.
 
 ## Use
 
@@ -78,6 +80,31 @@ same tessellation). After `--install`, launch StepView once so Launch Services r
 extensions; `pluginkit -m -v -i com.dresden.stepview.thumbnail` should then list it. Note that
 `qlmanage -t/-p` may hang for extension-backed types on recent macOS; test in Finder instead.
 Set `STEPVIEW_NO_QL=1` to skip building the extensions.
+
+Release signing: every `codesign` call in the build goes through `macos/signing.sh`. Set
+`STEPVIEW_SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)"` to sign the app, both Quick Look
+extensions and the DMG with that identity plus the hardened runtime and a secure timestamp; leave it
+unset for ad-hoc signing. Releases are built and published from a Mac; CI only builds and tests.
+Store the notarization credentials in the keychain once (it prompts for an app-specific password
+from account.apple.com):
+
+```
+xcrun notarytool store-credentials stepview --apple-id you@example.com --team-id TEAMID
+```
+
+Then, after bumping `version` in `Cargo.toml` and pushing:
+
+```
+STEPVIEW_SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" STEPVIEW_NOTARY_PROFILE=stepview macos/package.sh
+gh release create v<version> build/dist/StepView-<version>-macos-arm64.dmg \
+  build/dist/StepView-<version>-macos-arm64.zip build/dist/SHA256SUMS.txt --generate-notes
+```
+
+`macos/package.sh` builds, signs, notarizes the app and the DMG, staples both tickets, writes the
+`.dmg`, `.zip` and `SHA256SUMS.txt` to `build/dist/` and finishes with a Gatekeeper check. It also
+accepts `APPLE_ID` + `APPLE_APP_PASSWORD` + `APPLE_TEAM_ID` or an App Store Connect API key
+(`APP_STORE_CONNECT_API_KEY` path + `APP_STORE_CONNECT_KEY_ID` + `APP_STORE_CONNECT_ISSUER_ID`) instead
+of the keychain profile; with no credentials at all it only signs.
 
 ## How it works
 
