@@ -2,7 +2,7 @@
 
 use egui::{Color32, RichText};
 use step_brep::NodeId;
-use step_render::{RenderMode, StandardView};
+use step_render::{RenderMode, StandardView, UpAxis};
 
 use super::tools::{SectionAxis, format_len};
 use super::{App, Quality, apply_prefs_to_settings, group_digits};
@@ -13,6 +13,10 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
     egui::Panel::top("top").show(root, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
+                if ui.button("New Window   ⌘N").clicked() {
+                    ui.close();
+                    app.new_window(None);
+                }
                 if ui.button("Open…        ⌘O").clicked() {
                     ui.close();
                     app.open_dialog();
@@ -25,7 +29,7 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                     for p in recent {
                         if ui.button(p.file_name().and_then(|s| s.to_str()).unwrap_or("?")).on_hover_text(p.display().to_string()).clicked() {
                             ui.close();
-                            app.open_path(p);
+                            app.open_document(p);
                         }
                     }
                 });
@@ -64,6 +68,15 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                     app.set_projection(ortho);
                 }
                 ui.checkbox(&mut app.prefs.turntable, "Turntable orbit");
+                ui.menu_button(format!("Model up: {:?}", app.camera.up_axis), |ui| {
+                    for (label, axis) in [("Auto (exporter hint)", None), ("Y-up", Some(UpAxis::Y)), ("Z-up", Some(UpAxis::Z))] {
+                        if ui.radio(app.up_axis_override == axis, label).clicked() {
+                            app.set_up_axis(axis);
+                            ui.close();
+                        }
+                    }
+                    ui.weak("Auto uses Y for SolidWorks; otherwise Z. Override for models exported in another orientation.");
+                });
                 ui.separator();
                 ui.checkbox(&mut app.prefs.show_tree, "Assembly tree");
                 ui.checkbox(&mut app.prefs.show_props, "Properties");
@@ -588,6 +601,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
                     ("H / ⇧H / I", "hide selected / show all / isolate"),
                     ("Click / double-click", "select face / fit to part"),
                     ("Esc", "clear selection"),
+                    ("⌘N", "new window"),
                     ("⌘O / ⌘E / ⌘S / ⌘R", "open / export / screenshot / reload"),
                 ] {
                     ui.label(RichText::new(k).monospace());

@@ -6,6 +6,21 @@ use anyhow::Context;
 
 use crate::pipeline::LoadOpts;
 
+/// Each document gets its own event loop and renderer. Launch the executable directly
+/// (not `open`, which routes files back to an existing macOS application instance).
+pub fn open_window(path: Option<&std::path::Path>) -> anyhow::Result<()> {
+    let executable = std::env::current_exe().context("locate StepView executable")?;
+    let mut command = std::process::Command::new(executable);
+    if let Some(path) = path {
+        command.arg("--").arg(path);
+    }
+    let mut child = command.spawn().context("launch StepView window")?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 pub fn run(initial: Option<PathBuf>, opts: LoadOpts) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     crate::macos::install_open_handler();

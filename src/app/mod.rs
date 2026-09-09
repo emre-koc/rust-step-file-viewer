@@ -3,6 +3,7 @@
 
 mod view_cube;
 mod navigation;
+mod orientation;
 mod model;
 mod panels;
 mod tools;
@@ -15,7 +16,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use step_brep::Diagnostics;
-use step_render::{Camera, RenderMode, RenderSettings, StandardView};
+use step_render::{Camera, RenderMode, RenderSettings, StandardView, UpAxis};
 
 use crate::loader::{LoadMsg, Loader};
 use crate::pipeline::{CacheOutcome, LoadOpts, Timings};
@@ -117,6 +118,7 @@ pub struct LoadState {
 pub struct App {
     pub prefs: Prefs,
     pub camera: Camera,
+    pub up_axis_override: Option<UpAxis>,
     pub view_animation: Option<navigation::ViewAnimation>,
     pub settings: RenderSettings,
     pub loader: Loader,
@@ -154,6 +156,7 @@ impl App {
         let mut app = App {
             prefs,
             camera,
+            up_axis_override: None,
             view_animation: None,
             settings,
             loader,
@@ -181,6 +184,12 @@ impl App {
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
+        let path = path.canonicalize().unwrap_or(path);
+        if self.load.path.as_ref() != Some(&path) {
+            self.up_axis_override = None;
+        }
+        self.camera.up_axis = self.up_axis_override.unwrap_or_default();
+        self.camera.standard_view(StandardView::Iso);
         self.load = LoadState { started: Some(Instant::now()), loading: true, path: Some(path.clone()), ..Default::default() };
         self.model = None;
         self.selection = None;
@@ -230,6 +239,12 @@ impl App {
                     self.status = format!("Indexed {entities} entities in {index_ms:.0} ms");
                 }
                 LoadMsg::Structure { file, structure, .. } => {
+                    self.camera.up_axis = self.up_axis_override.unwrap_or_else(|| orientation::suggested_up_axis(file.header()));
+                    if !self.camera_touched {
+                        self.camera.standard_view(StandardView::Iso);
+                    } else {
+                        self.camera.view_from_direction(-self.camera.forward());
+                    }
                     self.load.total = structure.assembly.shapes.len();
                     self.status = format!("{} parts, {} instances — tessellating…", structure.assembly.product_count, structure.assembly.instances.len());
                     self.model = Some(LoadedModel::new(file, structure));
@@ -298,6 +313,30 @@ impl App {
         self.prefs.ortho = ortho;
     }
 
+    pub fn set_up_axis(&mut self, axis: Option<UpAxis>) {
+        self.up_axis_override = axis;
+        let up = axis.unwrap_or_else(|| self.model.as_ref().map_or(UpAxis::Z, |m| orientation::suggested_up_axis(m.file.header())));
+        self.direct_camera_input();
+        self.camera.up_axis = up;
+        // Keep the same eye direction, target, distance and projection; level the horizon.
+        self.camera.view_from_direction(-self.camera.forward());
+    }
+
+    pub fn new_window(&mut self, path: Option<PathBuf>) {
+        if let Err(error) = crate::gui::open_window(path.as_deref()) {
+            self.status = format!("Could not open a new window: {error:#}");
+        }
+    }
+
+    pub fn open_document(&mut self, path: PathBuf) {
+        let path = path.canonicalize().unwrap_or(path);
+        if self.load.path.is_none() {
+            self.open_path(path);
+        } else if self.load.path.as_ref() != Some(&path) {
+            self.new_window(Some(path));
+        }
+    }
+
     pub fn orbit_camera(&mut self, yaw: f64, pitch: f64) {
         self.set_projection(false);
         self.camera.orbit(yaw, pitch);
@@ -354,8 +393,10 @@ impl App {
     }
 
     pub fn open_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("STEP", &["step", "stp", "STEP", "STP", "p21"]).pick_file() {
-            self.open_path(p);
+        if let Some(paths) = rfd::FileDialog::new().add_filter("STEP", &["step", "stp", "STEP", "STP", "p21"]).pick_files() {
+            for p in paths {
+                self.open_document(p);
+            }
         }
     }
 
@@ -404,6 +445,9 @@ impl App {
         });
         if ctx.egui_wants_keyboard_input() {
             return;
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N)) {
+            self.new_window(None);
         }
         if open {
             self.open_dialog();
@@ -463,8 +507,8 @@ impl App {
 
     fn handle_drops(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
-        if let Some(p) = dropped.into_iter().find(|p| is_step(p)) {
-            self.open_path(p);
+        for p in dropped.into_iter().filter(|p| is_step(p)) {
+            self.open_document(p);
         }
     }
 }
@@ -507,8 +551,8 @@ impl eframe::App for App {
         self.last_frame = Instant::now();
         self.drain_messages();
         #[cfg(target_os = "macos")]
-        if let Some(p) = crate::macos::take_pending().into_iter().rev().find(|p| is_step(p)) {
-            self.open_path(p);
+        for p in crate::macos::take_pending().into_iter().filter(|p| is_step(p)) {
+            self.open_document(p);
         }
         self.handle_drops(ctx);
         self.handle_shortcuts(ctx);
@@ -518,6 +562,10 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let title = self.load.path.as_ref().and_then(|p| p.file_name()).map_or_else(|| "StepView".to_owned(), |name| format!("{} — StepView", name.to_string_lossy()));
+        if ui.input(|i| i.viewport().title.as_deref() != Some(title.as_str())) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
         panels::top_bar(self, ui);
         panels::status_bar(self, ui);
         if self.prefs.show_tree {

@@ -45,6 +45,7 @@ mod tests {
         App {
             prefs: Prefs::default(),
             camera: Camera::default(),
+            up_axis_override: None,
             view_animation: None,
             settings: RenderSettings::default(),
             loader: Loader::new(Arc::new(|| {})),
@@ -120,6 +121,57 @@ mod tests {
         app.direct_camera_input();
         assert!(app.view_animation.is_none());
         assert!(app.camera_touched);
+    }
+
+    #[test]
+    fn changing_up_axis_levels_the_view_without_moving_the_camera() {
+        use glam::DVec3;
+        use step_render::UpAxis;
+        let mut app = app();
+        app.camera.target = DVec3::new(12.0, 30.0, -8.0);
+        app.camera.distance = 321.0;
+        app.camera.ortho = true;
+        let eye = app.camera.eye();
+        let target = app.camera.target;
+        app.set_up_axis(Some(UpAxis::Y));
+        assert_eq!(app.camera.up_axis, UpAxis::Y);
+        assert!(app.camera.eye().distance(eye) < 1e-9);
+        assert_eq!(app.camera.target, target);
+        assert_eq!(app.camera.distance, 321.0);
+        assert!(app.camera.ortho);
+        assert!(app.camera.right().dot(DVec3::Y).abs() < 1e-9);
+        assert!(app.camera.up().dot(DVec3::Y) > 0.0);
+        app.set_up_axis(None);
+        assert_eq!(app.camera.up_axis, UpAxis::Z);
+        assert!(app.camera.eye().distance(eye) < 1e-9);
+    }
+
+    #[test]
+    fn up_override_survives_reload_but_not_a_different_document() {
+        use step_render::UpAxis;
+        fn finish(app: &mut crate::app::App) {
+            let started = Instant::now();
+            while app.load.loading {
+                app.drain_messages();
+                assert!(started.elapsed() < Duration::from_secs(10));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(app.load.error.is_none(), "{:?}", app.load.error);
+        }
+        let mut app = app();
+        app.prefs.use_cache = false;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        app.open_path(root.join("cube_mm.step"));
+        finish(&mut app);
+        app.set_up_axis(Some(UpAxis::Y));
+        app.reload();
+        finish(&mut app);
+        assert_eq!(app.up_axis_override, Some(UpAxis::Y));
+        assert_eq!(app.camera.up_axis, UpAxis::Y);
+        app.open_path(root.join("two_cubes_assembly_inch.step"));
+        finish(&mut app);
+        assert_eq!(app.up_axis_override, None);
+        assert_eq!(app.camera.up_axis, UpAxis::Z);
     }
 
     #[test]

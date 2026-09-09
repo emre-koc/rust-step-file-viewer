@@ -43,6 +43,12 @@ Global flags: `--tol <mm>` (chord tolerance; default derives from model size), `
 
 ### GUI
 
+Use **File → New Window** (⌘N) for another independent StepView window. Opening files from
+Finder, **Open** (⌘O), Open Recent, or drag-and-drop reuses an empty window; further files open
+in separate windows, keeping existing models available. You can select or drop multiple files.
+Each window has its own model, camera, selection, and renderer, and its title shows the filename.
+**Reload** (⌘R) reloads the current window's model.
+
 | input | action |
 |---|---|
 | drag | orbit (turntable, Z up) |
@@ -140,3 +146,10 @@ tracks the camera: click a signed X/Y/Z face for an orthographic axis view, or a
 perspective diagonal view. Drag the cube or model to orbit in perspective. View changes animate
 briefly and retain your zoom and orbit center; use **Fit** to frame the whole assembly. Named views
 and shortcuts 1–7 follow the same projection rules. Pan and zoom retain the selected projection.
+
+**View → Model up** offers **Auto**, **Y-up**, and **Z-up** for the current document. Auto uses
+the STEP exporter header as a hint: SolidWorks/SwSTEP defaults to Y-up; other exporters fall back
+to Z-up. This is a convention, not a guarantee about an exported model's physical orientation.
+Use the manual override when needed. Changing it levels the horizon without moving the camera
+or changing zoom; turntable orbit and named views then use that axis. Overrides survive Reload
+in the same window and reset for a different document.
