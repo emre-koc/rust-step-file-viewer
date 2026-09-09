@@ -1,6 +1,8 @@
 //! The eframe application: state, message handling and layout. Panels live in `panels.rs`, the
 //! 3D viewport in `viewport.rs`, model bookkeeping in `model.rs`, measure/section in `tools.rs`.
 
+mod view_cube;
+mod navigation;
 mod model;
 mod panels;
 mod tools;
@@ -63,14 +65,25 @@ pub struct Prefs {
     pub turntable: bool,
 }
 
+impl Prefs {
+    fn migrate_appearance(&mut self) {
+        if self.background_srgb == [58, 62, 70] {
+            self.background_srgb = [53, 53, 53];
+        }
+        if self.edge_color == [26, 28, 32, 255] {
+            self.edge_color = [38, 38, 38, 190];
+        }
+    }
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             mode: RenderMode::ShadedEdges,
             quality: Quality::Preview,
             msaa: 4,
-            background_srgb: [58, 62, 70],
-            edge_color: [26, 28, 32, 255],
+            background_srgb: [53, 53, 53],
+            edge_color: [38, 38, 38, 190],
             show_stats: true,
             show_tree: true,
             show_props: true,
@@ -104,6 +117,7 @@ pub struct LoadState {
 pub struct App {
     pub prefs: Prefs,
     pub camera: Camera,
+    pub view_animation: Option<navigation::ViewAnimation>,
     pub settings: RenderSettings,
     pub loader: Loader,
     pub load: LoadState,
@@ -124,12 +138,12 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>, opts: LoadOpts) -> Self {
-        let prefs: Prefs = cc.storage.and_then(|s| eframe::get_value(s, "prefs")).unwrap_or_default();
+        let mut prefs: Prefs = cc.storage.and_then(|s| eframe::get_value(s, "prefs")).unwrap_or_default();
+        prefs.migrate_appearance();
         let ctx = cc.egui_ctx.clone();
         let loader = Loader::new(Arc::new(move || ctx.request_repaint()));
         let viewport = cc.wgpu_render_state.as_ref().map(Viewport::new);
-        let mut camera = Camera::default();
-        camera.ortho = prefs.ortho;
+        let camera = Camera { ortho: prefs.ortho, ..Default::default() };
         let mut settings = RenderSettings::default();
         apply_prefs_to_settings(&prefs, &mut settings);
         let mut load_opts = opts.clone();
@@ -140,6 +154,7 @@ impl App {
         let mut app = App {
             prefs,
             camera,
+            view_animation: None,
             settings,
             loader,
             load: LoadState::default(),
@@ -173,6 +188,7 @@ impl App {
         if let Some(v) = &mut self.viewport {
             v.clear_scene();
         }
+        self.view_animation = None;
         self.camera_touched = false;
         self.pending_fit = true;
         let mut opts = self.load_opts.clone();
@@ -265,18 +281,42 @@ impl App {
     }
 
     pub fn fit_all(&mut self) {
+        self.direct_camera_input();
         if let Some(v) = &self.viewport {
-            self.camera.fit(v.scene_bbox());
-            self.camera_touched = true;
+            self.camera.fit_aspect(v.scene_bbox(), v.last_rect.aspect_ratio() as f64);
         }
     }
 
-    pub fn set_view(&mut self, view: StandardView) {
-        self.camera.standard_view(view);
-        if let Some(v) = &self.viewport {
-            self.camera.fit(v.scene_bbox());
-        }
+    pub fn direct_camera_input(&mut self) {
+        self.view_animation = None;
         self.camera_touched = true;
+    }
+
+    pub fn set_projection(&mut self, ortho: bool) {
+        self.direct_camera_input();
+        self.camera.ortho = ortho;
+        self.prefs.ortho = ortho;
+    }
+
+    pub fn orbit_camera(&mut self, yaw: f64, pitch: f64) {
+        self.set_projection(false);
+        self.camera.orbit(yaw, pitch);
+    }
+
+    pub fn drag_orbit(&mut self, delta: egui::Vec2) {
+        // Camera::orbit already applies the camera/model sign reversal.
+        self.orbit_camera(delta.x as f64 * 0.008, delta.y as f64 * 0.008);
+    }
+
+    pub fn snap_direction(&mut self, direction: glam::DVec3, ortho: bool) {
+        self.set_projection(ortho);
+        let mut destination = self.camera;
+        destination.view_from_direction(direction);
+        self.view_animation = Some(navigation::ViewAnimation::new(self.camera.orientation, destination.orientation));
+    }
+
+    pub fn set_view(&mut self, view: StandardView) {
+        self.snap_direction(-self.camera.standard_view_forward(view), view != StandardView::Iso);
     }
 
     pub fn export_dialog(&mut self) {
@@ -302,7 +342,7 @@ impl App {
 
     pub fn screenshot_dialog(&mut self) {
         let Some(v) = &mut self.viewport else { return };
-        let default_name = self.load.path.as_ref().and_then(|p| p.file_stem()).and_then(|s| s.to_str()).map(|s| format!("{s}.png")).unwrap_or_else(|| "stepview.png".into());
+        let default_name = self.load.path.as_ref().and_then(|p| p.file_stem()).and_then(|s| s.to_str()).map(|s| format!("{s}.png")).unwrap_or_else(|| "StepView.png".into());
         let Some(out) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name(default_name).save_file() else { return };
         match v.screenshot(&self.camera, &self.settings, 2) {
             Ok(img) => match img.save(&out) {

@@ -276,6 +276,22 @@ impl Camera {
         self.orientation = orientation_from(forward, up);
     }
 
+    /// Look from a world-space direction towards the current target without changing zoom.
+    /// Axis poles use the same screen-up convention as the named top/bottom views.
+    pub fn view_from_direction(&mut self, direction: DVec3) {
+        if !direction.is_finite() || direction.length_squared() < 1e-20 {
+            return;
+        }
+        let eye_direction = direction.normalize();
+        let world_up = self.up_axis.up();
+        let up = if eye_direction.dot(world_up).abs() > 0.999999 {
+            self.up_axis.front_forward() * eye_direction.dot(world_up).signum()
+        } else {
+            world_up
+        };
+        self.orientation = orientation_from(-eye_direction, up);
+    }
+
     /// The view direction [`Camera::standard_view`] would install (useful for tests and UI state).
     pub fn standard_view_forward(&self, view: StandardView) -> DVec3 {
         let u = self.up_axis.up();
@@ -321,6 +337,33 @@ mod tests {
             );
         }
         out
+    }
+
+    #[test]
+    fn cube_directions_preserve_focus_and_match_named_axes() {
+        for up_axis in [UpAxis::Z, UpAxis::Y] {
+            let mut camera = Camera { target: DVec3::new(12.0, -8.0, 40.0), distance: 123.0, up_axis, ..Default::default() };
+            for view in [StandardView::Front, StandardView::Back, StandardView::Left, StandardView::Right, StandardView::Top, StandardView::Bottom, StandardView::Iso] {
+                let mut expected = camera;
+                expected.standard_view(view);
+                camera.view_from_direction(-expected.forward());
+                assert!((camera.forward() - expected.forward()).length() < 1e-9);
+                assert!((camera.up() - expected.up()).length() < 1e-9);
+                assert_eq!(camera.target, DVec3::new(12.0, -8.0, 40.0));
+                assert_eq!(camera.distance, 123.0);
+            }
+            for x in -1..=1 { for y in -1..=1 { for z in -1..=1 {
+                let direction = DVec3::new(x as f64, y as f64, z as f64);
+                if direction == DVec3::ZERO { continue; }
+                camera.view_from_direction(direction);
+                assert!((camera.forward() + direction.normalize()).length() < 1e-9);
+                assert!(camera.orientation.is_finite());
+            }}}
+            let before = camera;
+            camera.view_from_direction(DVec3::ZERO);
+            camera.view_from_direction(DVec3::splat(f64::NAN));
+            assert_eq!(camera, before);
+        }
     }
 
     #[test]

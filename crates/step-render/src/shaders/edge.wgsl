@@ -5,6 +5,7 @@ struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) opacity: f32,
 };
 
 @vertex
@@ -28,13 +29,20 @@ fn vs_main(
         c = vec4<f32>(mix(c.rgb, globals.sel_color.rgb, globals.sel_color.a), 1.0);
     }
     out.color = c;
+    out.opacity = face_color(inst, inst.face_base + face_slot).a * globals.params.x;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    if (is_clipped(in.world_pos)) {
+    if (is_clipped(in.world_pos) || in.opacity < 1.0) {
         discard;
     }
-    return to_target(in.color.rgb, 1.0);
+    return in.color;
+}
+
+@fragment
+fn fs_transparent(in: VsOut) -> TransparentOut {
+    if (is_clipped(in.world_pos) || in.opacity <= 0.0 || in.opacity >= 1.0) { discard; }
+    return transparent_output(in.color.rgb, in.opacity * in.color.a, in.clip_pos.z);
 }

@@ -137,6 +137,8 @@ struct GpuGlobals {
     sel_color: [f32; 4],
     light_dir: [f32; 4],
     up_axis: [f32; 4],
+    fill_dir: [f32; 4],
+    view_dir: [f32; 4],
     params: [f32; 4],
     modes: [u32; 4],
 }
@@ -145,7 +147,11 @@ struct GpuGlobals {
 struct MsaaPipelines {
     shaded_cull: wgpu::RenderPipeline,
     shaded_nocull: wgpu::RenderPipeline,
-    shaded_xray: wgpu::RenderPipeline,
+    transparent_cull: wgpu::RenderPipeline,
+    transparent_nocull: wgpu::RenderPipeline,
+    transparent_edge: wgpu::RenderPipeline,
+    composite: wgpu::RenderPipeline,
+    composite_layout: wgpu::BindGroupLayout,
     edge: wgpu::RenderPipeline,
 }
 
@@ -326,22 +332,24 @@ impl Renderer {
         scene.flush(device, queue);
 
         let aspect = width as f64 / height as f64;
-        let globals = self.build_globals(scene, camera, settings, aspect);
+        let transparent = settings.mode == RenderMode::XRay || scene.draws().iter().any(|d| d.has_transparency);
+        if transparent {
+            self.targets.as_mut().unwrap().ensure_transparency(device);
+        }
+        let mut globals = self.build_globals(scene, camera, settings, aspect);
+        globals.modes[3] = u32::from(transparent);
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
         let targets = self.targets.as_ref().expect("targets created above");
         let pipes = self.pipelines.get(&samples).expect("pipelines created above");
         let clip_on = settings.clip_plane.is_some();
-        let clear = clear_color(settings.background, self.color_format);
-
-        let (color_view, resolve_target) = match &targets.msaa_color {
-            Some(msaa) => (msaa, Some(target.color)),
-            None => (target.color, None),
-        };
+        let bg = settings.background;
+        let clear = wgpu::Color { r: (bg[0] * bg[3]) as f64, g: (bg[1] * bg[3]) as f64, b: (bg[2] * bg[3]) as f64, a: bg[3] as f64 };
+        let color_view = &targets.color;
+        let resolve_target = None;
 
         // ---------------------------------------------------------- shaded
-        let mut color_loaded = false;
-        if settings.mode.draws_triangles() {
+        {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("step-render shaded"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -365,16 +373,13 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.globals_bind_group, &[]);
             pass.set_bind_group(1, scene.instance_bind_group(), &[]);
-            let xray = settings.mode == RenderMode::XRay;
-            for item in scene.draws() {
+            for item in scene.draws().iter().filter(|_| settings.mode.draws_triangles()) {
                 let shape = scene.shape_at(item.shape);
                 let body = &shape.bodies[item.body as usize];
                 if body.index_count == 0 {
                     continue;
                 }
-                let pipe = if xray {
-                    &pipes.shaded_xray
-                } else if body.double_sided || clip_on {
+                let pipe = if body.double_sided || clip_on {
                     &pipes.shaded_nocull
                 } else {
                     &pipes.shaded_cull
@@ -389,7 +394,6 @@ impl Renderer {
                     item.first_instance..item.first_instance + item.instance_count,
                 );
             }
-            color_loaded = true;
         }
 
         // ----------------------------------------------------------- edges
@@ -401,14 +405,14 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target,
                     ops: wgpu::Operations {
-                        load: if color_loaded { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(clear) },
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &targets.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: if color_loaded { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(1.0) },
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -434,6 +438,68 @@ impl Renderer {
                     item.first_instance..item.first_instance + item.instance_count,
                 );
             }
+        }
+
+        // OIT keeps instanced batches intact: each fragment chooses its pass by effective alpha.
+        if let Some((accum, reveal)) = targets.transparency.as_ref().filter(|_| transparent) {
+            let attachment = |view, clear| Some(wgpu::RenderPassColorAttachment {
+                view, depth_slice: None, resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("step-render transparency"),
+                color_attachments: &[attachment(accum, wgpu::Color::TRANSPARENT), attachment(reveal, wgpu::Color::WHITE)],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.depth,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &self.globals_bind_group, &[]);
+            pass.set_bind_group(1, scene.instance_bind_group(), &[]);
+            for item in scene.draws().iter().filter(|d| d.has_transparency || settings.mode == RenderMode::XRay) {
+                let shape = scene.shape_at(item.shape);
+                let body = &shape.bodies[item.body as usize];
+                pass.set_bind_group(2, &shape.face_bind_group, &[]);
+                pass.set_vertex_buffer(0, body.vertices.slice(..));
+                if settings.mode.draws_triangles() && body.index_count > 0 {
+                    let nocull = body.double_sided || clip_on || settings.mode == RenderMode::XRay;
+                    pass.set_pipeline(if nocull { &pipes.transparent_nocull } else { &pipes.transparent_cull });
+                    pass.set_index_buffer(body.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..body.index_count, 0, item.first_instance..item.first_instance + item.instance_count);
+                }
+                if settings.mode.draws_edges() && let Some(edges) = &body.edges {
+                    pass.set_pipeline(&pipes.transparent_edge);
+                    pass.set_index_buffer(edges.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..body.edge_count, 0, item.first_instance..item.first_instance + item.instance_count);
+                }
+            }
+        }
+
+        // Composite per sample before resolving, then encode exactly once for the external target.
+        {
+            let (accum, reveal) = targets.transparency.as_ref().map(|(a, r)| (a, r)).unwrap_or((color_view, color_view));
+            let textures = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("step-render composite textures"), layout: &pipes.composite_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(color_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(accum) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(reveal) },
+                ],
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("step-render composite"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target.color, depth_slice: None, resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipes.composite);
+            pass.set_bind_group(0, &self.globals_bind_group, &[]);
+            pass.set_bind_group(1, &textures, &[]);
+            pass.draw(0..3, 0..1);
         }
 
         // -------------------------------------------------------------- ID
@@ -641,78 +707,61 @@ impl Renderer {
             return;
         }
         let ms = wgpu::MultisampleState { count: samples, ..Default::default() };
-        let shaded = |label: &str, cull: Option<wgpu::Face>, blend: Option<wgpu::BlendState>, depth_write: bool| {
+        let opaque_targets = [Some(wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL,
+        })];
+        let add = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+        let reveal = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::OneMinusSrc, operation: wgpu::BlendOperation::Add };
+        let transparent_targets = [
+            Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState { color: add, alpha: add }), write_mask: wgpu::ColorWrites::ALL }),
+            Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::R16Float, blend: Some(wgpu::BlendState { color: reveal, alpha: reveal }), write_mask: wgpu::ColorWrites::RED }),
+        ];
+        let geometry = |label: &str, edges: bool, cull: Option<wgpu::Face>, transparent: bool| {
+            let module = if edges { &self.edge_module } else { &self.shaded_module };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&self.layouts.pipeline),
-                vertex: wgpu::VertexState {
-                    module: &self.shaded_module,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(vertex_layout())],
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: cull,
-                    ..Default::default()
-                },
-                depth_stencil: Some(depth_state(depth_write, wgpu::CompareFunction::Less)),
+                label: Some(label), layout: Some(&self.layouts.pipeline),
+                vertex: wgpu::VertexState { module, entry_point: Some("vs_main"), compilation_options: Default::default(), buffers: &[Some(vertex_layout())] },
+                primitive: wgpu::PrimitiveState { topology: if edges { wgpu::PrimitiveTopology::LineList } else { wgpu::PrimitiveTopology::TriangleList }, cull_mode: cull, ..Default::default() },
+                depth_stencil: Some(depth_state(!transparent && !edges, if edges { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Less })),
                 multisample: ms,
                 fragment: Some(wgpu::FragmentState {
-                    module: &self.shaded_module,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: self.color_format,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    module, entry_point: Some(if transparent { "fs_transparent" } else { "fs_main" }), compilation_options: Default::default(),
+                    targets: if transparent { &transparent_targets } else { &opaque_targets },
                 }),
-                multiview_mask: None,
-                cache: None,
+                multiview_mask: None, cache: None,
             })
         };
-
-        let edge = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("step-render edge"),
-            layout: Some(&self.layouts.pipeline),
-            vertex: wgpu::VertexState {
-                module: &self.edge_module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(vertex_layout())],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(depth_state(true, wgpu::CompareFunction::LessEqual)),
-            multisample: ms,
-            fragment: Some(wgpu::FragmentState {
-                module: &self.edge_module,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: self.color_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
+        let entries: Vec<_> = (0..3).map(|binding| wgpu::BindGroupLayoutEntry {
+            binding, visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: samples > 1 },
+            count: None,
+        }).collect();
+        let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("composite textures"), entries: &entries });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("composite"), bind_group_layouts: &[Some(&self.layouts.globals), Some(&composite_layout)], immediate_size: 0,
         });
-
+        let shader = include_str!("shaders/composite.wgsl")
+            .replace("TEXTURE_TYPE", if samples > 1 { "texture_multisampled_2d" } else { "texture_2d" })
+            .replace("SAMPLE_COUNT", &samples.to_string());
+        let globals = COMMON_WGSL.split("struct Instance").next().unwrap();
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("composite"), source: wgpu::ShaderSource::Wgsl(format!("{globals}\n{shader}").into()),
+        });
+        let composite = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("composite"), layout: Some(&layout),
+            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_main"), compilation_options: Default::default(), buffers: &[] },
+            primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some("fs_main"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: self.color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+            multiview_mask: None, cache: None,
+        });
         let pipes = MsaaPipelines {
-            shaded_cull: shaded("step-render shaded (cull)", Some(wgpu::Face::Back), None, true),
-            shaded_nocull: shaded("step-render shaded (no cull)", None, None, true),
-            shaded_xray: shaded(
-                "step-render shaded (x-ray)",
-                None,
-                Some(wgpu::BlendState::ALPHA_BLENDING),
-                false,
-            ),
-            edge,
+            shaded_cull: geometry("opaque cull", false, Some(wgpu::Face::Back), false),
+            shaded_nocull: geometry("opaque double sided", false, None, false),
+            transparent_cull: geometry("transparent cull", false, Some(wgpu::Face::Back), true),
+            transparent_nocull: geometry("transparent double sided", false, None, true),
+            transparent_edge: geometry("transparent edges", true, None, true),
+            edge: geometry("opaque edges", true, None, false),
+            composite, composite_layout,
         };
         self.pipelines.insert(samples, pipes);
     }
@@ -753,6 +802,14 @@ impl Renderer {
                 let u: Vec3 = camera.up_axis.up().as_vec3();
                 [u.x, u.y, u.z, 0.0]
             },
+            fill_dir: {
+                let f = (-camera.forward() - camera.up() * 0.55 + camera.right() * 0.75).normalize().as_vec3();
+                [f.x, f.y, f.z, 0.0]
+            },
+            view_dir: {
+                let f = camera.forward().as_vec3();
+                [f.x, f.y, f.z, f32::from(camera.ortho)]
+            },
             params: [
                 if settings.mode == RenderMode::XRay { settings.xray_alpha.clamp(0.0, 1.0) } else { 1.0 },
                 EDGE_DEPTH_BIAS,
@@ -785,27 +842,6 @@ fn srgb_u8_to_linear(c: [u8; 4]) -> [f32; 4] {
         if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
     };
     [f(c[0]), f(c[1]), f(c[2]), c[3] as f32 / 255.0]
-}
-
-fn linear_to_srgb_f32(x: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    if x <= 0.0031308 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 }
-}
-
-/// Clear values are written to the attachment unconverted, so a non-sRGB target needs the encode
-/// we would otherwise get from the hardware.
-fn clear_color(linear: [f32; 4], format: wgpu::TextureFormat) -> wgpu::Color {
-    let c = if format.is_srgb() {
-        linear
-    } else {
-        [
-            linear_to_srgb_f32(linear[0]),
-            linear_to_srgb_f32(linear[1]),
-            linear_to_srgb_f32(linear[2]),
-            linear[3],
-        ]
-    };
-    wgpu::Color { r: c[0] as f64, g: c[1] as f64, b: c[2] as f64, a: c[3] as f64 }
 }
 
 /// Map a `MAP_READ` buffer synchronously and copy it out. The buffer is unmapped before returning,

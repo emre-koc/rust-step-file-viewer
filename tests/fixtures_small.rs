@@ -74,3 +74,22 @@ fn two_cubes_inch_assembly_transforms_and_units() {
     assert!((bb.max.x - 86.2).abs() < 1e-9);
     assert!((bb.size().y - 10.0).abs() < 1e-9);
 }
+
+#[test]
+fn step_transparency_survives_tessellation_and_cache() {
+    let source = include_str!("fixtures/cube_mm.step")
+        .replace("#160=SURFACE_SIDE_STYLE('',(#159));", "#160=SURFACE_SIDE_STYLE('',(#159,#175));")
+        .replace("ENDSEC;\nEND-ISO", "#175=SURFACE_STYLE_RENDERING_WITH_PROPERTIES(.NORMAL_SHADING.,#156,(#176));\n#176=SURFACE_STYLE_TRANSPARENT(0.65);\nENDSEC;\nEND-ISO");
+    let file = StepFile::from_bytes(source.into_bytes()).unwrap();
+    let structure = load_structure(&file, true);
+    assert_eq!(structure.styles.body[&step_p21::EntityId(155)], [200, 30, 30, 89]);
+    let (topology, _) = structure.extract(&file, step_brep::ShapeId(0));
+    let mesh = step_mesh::tessellate(&topology, &step_mesh::TessParams::PREVIEW);
+    assert_eq!(mesh.stats.faces_skipped, 0);
+    assert_eq!(mesh.bodies[0].face_ranges.iter().filter(|f| f.color[3] == 89).count(), 5);
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build/test-opacity-cache");
+    let hash = step_cache::file_hash(file.bytes());
+    step_cache::store(&dir, &hash, &step_mesh::TessParams::PREVIEW, "opacity", &[Some(mesh.clone())], &[172]).unwrap();
+    let cached = step_cache::lookup(&dir, &hash, &step_mesh::TessParams::PREVIEW).unwrap().unwrap();
+    assert_eq!(cached.meshes[0].as_ref().unwrap().bodies[0].face_ranges, mesh.bodies[0].face_ranges);
+}

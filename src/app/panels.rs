@@ -59,7 +59,10 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                     ui.close();
                     app.fit_all();
                 }
-                ui.checkbox(&mut app.camera.ortho, "Orthographic");
+                let mut ortho = app.camera.ortho;
+                if ui.checkbox(&mut ortho, "Orthographic").changed() {
+                    app.set_projection(ortho);
+                }
                 ui.checkbox(&mut app.prefs.turntable, "Turntable orbit");
                 ui.separator();
                 ui.checkbox(&mut app.prefs.show_tree, "Assembly tree");
@@ -145,6 +148,12 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
             for (label, v) in [("Iso", StandardView::Iso), ("Top", StandardView::Top), ("Front", StandardView::Front), ("Right", StandardView::Right)] {
                 if ui.small_button(label).clicked() {
                     app.set_view(v);
+                }
+            }
+            ui.separator();
+            for (label, ortho) in [("Ortho", true), ("Perspective", false)] {
+                if ui.selectable_label(app.camera.ortho == ortho, label).clicked() {
+                    app.set_projection(ortho);
                 }
             }
             ui.separator();
@@ -561,7 +570,7 @@ pub fn props_panel(app: &mut App, root: &mut egui::Ui) {
 pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     if app.about_open {
         egui::Window::new("StepView").open(&mut app.about_open).collapsible(false).resizable(false).show(ctx, |ui| {
-            ui.label(RichText::new(format!("stepview {}", env!("CARGO_PKG_VERSION"))).strong());
+            ui.label(RichText::new(format!("StepView {}", env!("CARGO_PKG_VERSION"))).strong());
             ui.label("Fast native STEP viewer (pure Rust, Metal via wgpu).");
             ui.separator();
             egui::Grid::new("keys").num_columns(2).show(ui, |ui| {

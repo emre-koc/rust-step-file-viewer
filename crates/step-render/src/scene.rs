@@ -100,6 +100,7 @@ pub(crate) struct GpuBody {
     pub face_base: u32,
     pub double_sided: bool,
     pub origin: DVec3,
+    pub has_transparency: bool,
 }
 
 pub(crate) struct GpuShape {
@@ -130,6 +131,7 @@ pub(crate) struct DrawItem {
     pub body: u32,
     pub first_instance: u32,
     pub instance_count: u32,
+    pub has_transparency: bool,
 }
 
 /// Uploaded geometry plus the instances that place it.
@@ -238,6 +240,7 @@ impl Scene {
                 face_base,
                 double_sided: body.double_sided,
                 origin: body.origin,
+                has_transparency: body.face_ranges.iter().any(|f| f.color[3] < 255),
             });
         }
 
@@ -333,10 +336,12 @@ impl Scene {
         self.instances.get(instance.0 as usize).is_some_and(|i| i.visible)
     }
 
-    /// Replace the whole-instance selection set.
+    /// Replace the selection with whole instances, clearing all previous face highlights.
+    /// Apply any new per-face selection afterwards with [`Scene::set_selected_faces`].
     pub fn set_selected_instances(&mut self, selected: &[InstanceHandle]) {
         for i in &mut self.instances {
             i.selected = false;
+            i.selected_faces = None;
         }
         for h in selected {
             if let Some(i) = self.instances.get_mut(h.0 as usize) {
@@ -486,6 +491,9 @@ impl Scene {
                     body: bi as u32,
                     first_instance,
                     instance_count: list.len() as u32,
+                    has_transparency: list.iter().any(|&ii| {
+                        self.instances[ii as usize].color_override.map_or(body.has_transparency, |c| c[3] < 255)
+                    }),
                 });
             }
         }

@@ -11,8 +11,9 @@ pub(crate) struct Targets {
     pub samples: u32,
     pub format: wgpu::TextureFormat,
 
-    /// Multisampled colour, `None` when `samples == 1` (we render straight into the caller's view).
-    pub msaa_color: Option<wgpu::TextureView>,
+    /// Linear premultiplied color, composited per sample before encoding the external target.
+    pub color: wgpu::TextureView,
+    pub transparency: Option<(wgpu::TextureView, wgpu::TextureView)>,
     /// Depth for the shaded/edge passes, at `samples`.
     pub depth: wgpu::TextureView,
 
@@ -29,20 +30,7 @@ impl Targets {
         let height = height.max(1);
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
 
-        let msaa_color = (samples > 1).then(|| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("step-render msaa colour"),
-                    size,
-                    mip_level_count: 1,
-                    sample_count: samples,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    view_formats: &[],
-                })
-                .create_view(&wgpu::TextureViewDescriptor::default())
-        });
+        let color = attachment(device, size, samples, wgpu::TextureFormat::Rgba16Float, "linear opaque color");
 
         let depth = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -82,10 +70,29 @@ impl Targets {
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        Targets { width, height, samples, format, msaa_color, depth, id_texture, id_view, id_depth_view }
+        Targets { width, height, samples, format, color, transparency: None, depth, id_texture, id_view, id_depth_view }
+    }
+
+    pub fn ensure_transparency(&mut self, device: &wgpu::Device) {
+        if self.transparency.is_none() {
+            let size = wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 };
+            self.transparency = Some((
+                attachment(device, size, self.samples, wgpu::TextureFormat::Rgba16Float, "transparency accumulation"),
+                attachment(device, size, self.samples, wgpu::TextureFormat::R16Float, "transparency revealage"),
+            ));
+        }
     }
 
     pub fn matches(&self, width: u32, height: u32, samples: u32, format: wgpu::TextureFormat) -> bool {
         self.width == width.max(1) && self.height == height.max(1) && self.samples == samples && self.format == format
     }
+}
+
+fn attachment(device: &wgpu::Device, size: wgpu::Extent3d, samples: u32, format: wgpu::TextureFormat, label: &str) -> wgpu::TextureView {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label), size, mip_level_count: 1, sample_count: samples,
+        dimension: wgpu::TextureDimension::D2, format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    }).create_view(&wgpu::TextureViewDescriptor::default())
 }

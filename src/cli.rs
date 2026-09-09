@@ -6,7 +6,8 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "stepview",
+    name = "StepView",
+    bin_name = "stepview",
     version,
     about = "Fast native STEP viewer for macOS on Apple Silicon",
     args_conflicts_with_subcommands = true

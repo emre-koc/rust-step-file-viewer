@@ -429,3 +429,179 @@ fn far_from_origin_models_stay_sharp() {
     }
     assert!(buckets.len() >= 2, "far-away cube lost its face colours: {buckets:?}");
 }
+
+fn colored_sheet(z: f64, color: [u8; 4]) -> ShapeMesh {
+    let mut body = sheet_body(DVec3::new(0.0, 0.0, z), 3.0);
+    body.face_ranges[0].color = color;
+    ShapeMesh { bbox: body.bbox, bodies: vec![body], ..Default::default() }
+}
+
+fn linear_channel(v: u8) -> f32 {
+    let v = v as f32 / 255.0;
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+
+#[test]
+fn replacing_selection_clears_old_face_tints_and_restores_original_materials() {
+    let (device, queue, mut renderer) = gpu!();
+    let mut scene = renderer.new_scene(&device);
+    let shape = scene.upload_shape(&device, &queue, &cube_only_shape());
+    let instances = [
+        scene.add_instance(shape, DAffine3::from_translation(DVec3::new(-3.0, 0.0, 0.0)), 1),
+        scene.add_instance(shape, DAffine3::IDENTITY, 2),
+        scene.add_instance(shape, DAffine3::from_translation(DVec3::new(3.0, 0.0, 0.0)), 3),
+    ];
+    scene.set_instance_color_override(instances[0], Some([110, 200, 230, 89]));
+    scene.set_instance_color_override(instances[1], Some([35, 40, 45, 255]));
+    let mut camera = Camera::default();
+    camera.standard_view(StandardView::Iso);
+    camera.fit_aspect(scene.bbox(), 2.0);
+    for msaa in [1, 4] {
+        let settings = RenderSettings { mode: RenderMode::ShadedEdges, msaa, ..Default::default() };
+        let baseline = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 192, 96).unwrap();
+        for instance in instances {
+            // Viewport picks set both the whole-instance flag and a face bit.
+            scene.set_selected_instances(&[instance]);
+            scene.set_selected_faces(instance, &[2, 5]);
+            let selected = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 192, 96).unwrap();
+            assert_ne!(selected, baseline, "selection must visibly highlight the part");
+            scene.set_selected_instances(&[]);
+            let cleared = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 192, 96).unwrap();
+            assert_eq!(cleared, baseline, "deselection left a face tint (MSAA {msaa})");
+        }
+        // Selecting another part or tree node must also discard older face bits.
+        scene.set_selected_instances(&[instances[2]]);
+        let expected = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 192, 96).unwrap();
+        for instance in &instances[..2] {
+            scene.set_selected_instances(&[*instance]);
+            scene.set_selected_faces(*instance, &[2, 5]);
+            renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 192, 96).unwrap();
+        }
+        scene.set_selected_instances(&[instances[2]]);
+        let switched = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 192, 96).unwrap();
+        assert_eq!(switched, expected, "switching parts retained an earlier face highlight");
+        scene.set_selected_instances(&[]);
+    }
+}
+
+#[test]
+fn opacity_blends_in_linear_space_and_zero_alpha_is_not_pickable() {
+    let (device, queue, mut renderer) = gpu!();
+    let mut scene = renderer.new_scene(&device);
+    let handle = scene.upload_shape(&device, &queue, &colored_sheet(0.0, [110, 200, 230, 255]));
+    let inst = scene.add_instance(handle, DAffine3::IDENTITY, 42);
+    let mut camera = Camera { ortho: true, ..Default::default() };
+    camera.standard_view(StandardView::Top);
+    camera.fit(scene.bbox());
+    for msaa in [1, 4] {
+        let settings = RenderSettings { mode: RenderMode::Shaded, msaa, background: [0.05, 0.05, 0.05, 1.0], ..Default::default() };
+        scene.set_instance_color_override(inst, None);
+        let opaque = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 96, 96).unwrap();
+        scene.set_instance_color_override(inst, Some([110, 200, 230, 89]));
+        let transparent = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 96, 96).unwrap();
+        for c in 0..3 {
+            let expected = linear_channel(opaque[(48, 48)][c]) * (89.0 / 255.0) + 0.05 * (166.0 / 255.0);
+            let actual = linear_channel(transparent[(48, 48)][c]);
+            assert!((actual - expected).abs() < 0.008, "channel {c}: {actual} != {expected}");
+        }
+        assert_eq!(renderer.pick(&device, &queue, &scene, 48, 48).unwrap().node_id, 42);
+        scene.set_selected_instances(&[inst]);
+        let selected = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &RenderSettings { background: [0.0; 4], ..settings.clone() }, 96, 96).unwrap();
+        assert!((selected[(48, 48)][3] as i16 - 89).abs() <= 1, "selection changed opacity");
+        scene.set_selected_instances(&[]);
+        scene.set_instance_color_override(inst, Some([110, 200, 230, 0]));
+        let hidden = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &RenderSettings { mode: RenderMode::ShadedEdges, ..settings }, 96, 96).unwrap();
+        assert!(hidden.pixels().all(|p| p == &hidden[(0, 0)]), "invisible faces left color or edges");
+        assert!(renderer.pick(&device, &queue, &scene, 48, 48).is_none());
+    }
+}
+
+#[test]
+fn transparent_layers_are_order_independent_and_respect_opaque_depth() {
+    let (device, queue, mut renderer) = gpu!();
+    let mut scene = renderer.new_scene(&device);
+    let red = scene.upload_shape(&device, &queue, &colored_sheet(0.0, [230, 40, 40, 100]));
+    let blue = scene.upload_shape(&device, &queue, &colored_sheet(0.5, [40, 70, 230, 150]));
+    let a = scene.add_instance(red, DAffine3::IDENTITY, 1);
+    let b = scene.add_instance(blue, DAffine3::IDENTITY, 2);
+    let mut camera = Camera { ortho: true, ..Default::default() };
+    camera.standard_view(StandardView::Top);
+    camera.fit(scene.bbox());
+    for msaa in [1, 4] {
+        let settings = RenderSettings { mode: RenderMode::Shaded, msaa, ..Default::default() };
+        scene.set_visible(a, true);
+        scene.set_instance_color_override(b, None);
+        let forward = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 96, 96).unwrap();
+        let mut reverse_scene = renderer.new_scene(&device);
+        let blue = reverse_scene.upload_shape(&device, &queue, &colored_sheet(0.5, [40, 70, 230, 150]));
+        let red = reverse_scene.upload_shape(&device, &queue, &colored_sheet(0.0, [230, 40, 40, 100]));
+        reverse_scene.add_instance(blue, DAffine3::IDENTITY, 2);
+        reverse_scene.add_instance(red, DAffine3::IDENTITY, 1);
+        let reverse = renderer.render_offscreen(&device, &queue, &mut reverse_scene, &camera, &settings, 96, 96).unwrap();
+        assert!(forward.as_raw().iter().zip(reverse.as_raw()).all(|(a,b)| a.abs_diff(*b) <= 1));
+        scene.set_instance_color_override(b, Some([40, 70, 230, 255]));
+        let with_hidden_red = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 96, 96).unwrap();
+        scene.set_visible(a, false);
+        let no_red = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 96, 96).unwrap();
+        assert_eq!(with_hidden_red, no_red, "transparent geometry leaked through opaque foreground");
+    }
+}
+
+#[test]
+fn mixed_face_opacity_survives_clipping_xray_and_png_output() {
+    let (device, queue, mut renderer) = gpu!();
+    let mut colors = FACE_COLORS;
+    colors[1][3] = 89;
+    colors[2][3] = 0;
+    let body = box_body(DVec3::splat(-1.0), DVec3::splat(1.0), &colors, false);
+    let mut scene = renderer.new_scene(&device);
+    let handle = scene.upload_shape(&device, &queue, &ShapeMesh { bbox: body.bbox, bodies: vec![body], ..Default::default() });
+    let inst = scene.add_instance(handle, DAffine3::IDENTITY, 1);
+    let mut camera = Camera::default();
+    camera.fit(scene.bbox());
+    for msaa in [1, 4] {
+        for mode in [RenderMode::Shaded, RenderMode::ShadedEdges, RenderMode::XRay] {
+            let settings = RenderSettings { mode, msaa, background: [0.0; 4], ..Default::default() };
+            let img = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 128, 128).unwrap();
+            assert_eq!(img[(0,0)][3], 0);
+            assert!(img.pixels().any(|p| p[3] > 0 && p[3] < 255));
+            scene.set_selected_faces(inst, &[1]);
+            let clipped = renderer.render_offscreen(&device, &queue, &mut scene, &camera, &RenderSettings {
+                clip_plane: Some(ClipPlane::through(DVec3::ZERO, DVec3::Z, CAP_COLOR)), ..settings
+            }, 128, 128).unwrap();
+            assert!(clipped.pixels().any(|p| p[3] > 0));
+            scene.set_selected_faces(inst, &[]);
+        }
+    }
+    // A single transparent sheet has straight RGB even at antialiased silhouettes.
+    let mut sheet_scene = renderer.new_scene(&device);
+    let h = sheet_scene.upload_shape(&device, &queue, &colored_sheet(0.0, [190, 190, 190, 89]));
+    sheet_scene.add_instance(h, DAffine3::IDENTITY, 1);
+    let settings = RenderSettings { mode: RenderMode::Shaded, background: [0.0; 4], ..Default::default() };
+    camera.fit(sheet_scene.bbox());
+    let img = renderer.render_offscreen(&device, &queue, &mut sheet_scene, &camera, &settings, 128, 128).unwrap();
+    assert!(img.pixels().any(|p| p[3] > 0 && p[3] < 80));
+    for pixel in img.pixels().filter(|p| p[3] > 0) {
+        assert!(pixel[0] > 100, "premultiplied RGB would produce dark PNG halos: {pixel:?}");
+    }
+}
+
+#[test]
+fn srgb_and_plain_output_targets_encode_the_same_colors() {
+    let (device, queue, mut srgb) = gpu!();
+    let mut plain = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    for msaa in [1, 4] {
+        let settings = RenderSettings { mode: RenderMode::Shaded, msaa, ..Default::default() };
+        let mut images = Vec::new();
+        for renderer in [&mut srgb, &mut plain] {
+            let mut scene = renderer.new_scene(&device);
+            let h = scene.upload_shape(&device, &queue, &colored_sheet(0.0, [230, 45, 100, 89]));
+            scene.add_instance(h, DAffine3::IDENTITY, 1);
+            let mut camera = Camera::default();
+            camera.fit(scene.bbox());
+            images.push(renderer.render_offscreen(&device, &queue, &mut scene, &camera, &settings, 96, 96).unwrap());
+        }
+        assert!(images[0].as_raw().iter().zip(images[1].as_raw()).all(|(a,b)| a.abs_diff(*b) <= 2), "target encoding mismatch");
+        assert!(images[0][(0, 0)][0].abs_diff(53) <= 1);
+    }
+}

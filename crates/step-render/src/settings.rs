@@ -73,8 +73,8 @@ impl Default for RenderSettings {
     fn default() -> Self {
         RenderSettings {
             mode: RenderMode::ShadedEdges,
-            background: [0.055, 0.06, 0.07, 1.0],
-            edge_color: [26, 28, 32, 255],
+            background: [0.035601314, 0.035601314, 0.035601314, 1.0],
+            edge_color: [38, 38, 38, 190],
             msaa: 4,
             clip_plane: None,
             show_selection_highlight: true,

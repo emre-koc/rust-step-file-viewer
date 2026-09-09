@@ -1,4 +1,4 @@
-# stepview
+# StepView
 
 ![StepView: fast native STEP viewer for Apple Silicon](docs/hero.jpg)
 
@@ -27,6 +27,8 @@ Launch the app once so Finder registers the STEP file types and the Quick Look e
 macOS 13+.
 
 ## Use
+
+StepView’s command-line executable is `stepview`.
 
 ```
 stepview <file.step>                    # open the GUI (also: drag & drop, ⌘O, Finder "Open With")
@@ -124,3 +126,17 @@ stepview    CLI + eframe GUI, progressive background loader
 
 Everything is converted to millimetres at decode time. Faces that cannot be meshed become
 diagnostics (see `stepview info --mesh`), never a failed load.
+
+### Rendering and navigation
+
+The viewport preserves STEP part colors and material opacity, with neutral lighting and a gray
+background. Transparent surfaces and their edges blend over the opaque geometry behind them;
+fully transparent faces are invisible and do not intercept selection. The same rendering is used
+for screenshots, CLI PNGs, and GPU thumbnails. Overlapping transparent layers use weighted blended
+order-independent transparency (an approximation without refraction).
+
+The top toolbar exposes **Ortho** and **Perspective**. The cube in the upper-right of the viewport
+tracks the camera: click a signed X/Y/Z face for an orthographic axis view, or an edge/corner for a
+perspective diagonal view. Drag the cube or model to orbit in perspective. View changes animate
+briefly and retain your zoom and orbit center; use **Fit** to frame the whole assembly. Named views
+and shortcuts 1–7 follow the same projection rules. Pan and zoom retain the selected projection.

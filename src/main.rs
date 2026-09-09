@@ -1,4 +1,4 @@
-//! stepview: fast native STEP viewer.
+//! StepView: fast native STEP viewer.
 
 mod app;
 mod cli;

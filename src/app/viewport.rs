@@ -78,16 +78,20 @@ impl Viewport {
             dimension: wgpu::TextureDimension::D2,
             format: VIEW_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         });
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        // egui samples gamma-encoded values, so use a non-sRGB alias of the render texture.
+        let display_view = tex.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(wgpu::TextureFormat::Rgba8Unorm), ..Default::default()
+        });
         let mut er = self.egui_renderer.write();
         let id = match self.texture.take() {
             Some((_, _, id, _)) => {
-                er.update_egui_texture_from_wgpu_texture(&self.device, &view, wgpu::FilterMode::Linear, id);
+                er.update_egui_texture_from_wgpu_texture(&self.device, &display_view, wgpu::FilterMode::Linear, id);
                 id
             }
-            None => er.register_native_texture(&self.device, &view, wgpu::FilterMode::Linear),
+            None => er.register_native_texture(&self.device, &display_view, wgpu::FilterMode::Linear),
         };
         drop(er);
         self.texture = Some((tex, view, id, size));
@@ -137,6 +141,7 @@ impl Viewport {
 
 /// Draw the viewport into the central panel and process its input.
 pub fn show(app: &mut App, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    super::navigation::advance(app, ui.ctx());
     let avail = ui.available_rect_before_wrap();
     let ppp = ui.ctx().pixels_per_point();
     let size_px = ((avail.width() * ppp).round().max(1.0) as u32, (avail.height() * ppp).round().max(1.0) as u32);
@@ -151,6 +156,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
     vp.last_rect = response.rect;
     let rect = response.rect;
     let aspect = size_px.0 as f64 / size_px.1.max(1) as f64;
+    let cube = super::view_cube::show(ui, &app.camera, rect);
+    match cube.action {
+        Some(super::view_cube::Action::Snap { direction, ortho }) => app.snap_direction(direction, ortho),
+        Some(super::view_cube::Action::Orbit(delta)) => app.drag_orbit(delta),
+        None => {}
+    }
 
     // --- camera input ---
     let (zoom_delta, scroll, rotate, modifiers, hover) = ui.input(|i| {
@@ -162,7 +173,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         }
         (i.zoom_delta(), i.smooth_scroll_delta, rot, i.modifiers, i.pointer.hover_pos())
     });
-    let hovered = response.hovered() || response.dragged();
+    let cube_blocked = cube.dragging || hover.is_some_and(|p| cube.rect.contains(p));
+    let hovered = !cube_blocked && (response.hovered() || response.dragged());
     let cursor_ndc = |pos: Pos2| -> Option<glam::Vec2> {
         if !rect.contains(pos) {
             return None;
@@ -171,10 +183,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
     };
     if hovered {
         if (zoom_delta - 1.0).abs() > 1e-4 {
+            app.direct_camera_input();
             app.camera.zoom(zoom_delta as f64, hover.and_then(cursor_ndc), aspect);
             app.camera_touched = true;
         }
         if scroll != Vec2::ZERO {
+            app.direct_camera_input();
             if modifiers.shift {
                 app.camera.pan(-scroll.x as f64 * ppp as f64, -scroll.y as f64 * ppp as f64, size_px);
             } else {
@@ -184,28 +198,47 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
             app.camera_touched = true;
         }
         if rotate.abs() > 1e-5 {
+            app.set_projection(false);
             app.camera.roll(rotate as f64);
             app.camera_touched = true;
         }
     }
     let drag = response.drag_motion();
-    if response.dragged_by(egui::PointerButton::Primary) && drag != Vec2::ZERO {
+    if !cube_blocked && response.dragged_by(egui::PointerButton::Primary) && drag != Vec2::ZERO {
+        app.direct_camera_input();
         if modifiers.shift || modifiers.alt {
             app.camera.pan(drag.x as f64 * ppp as f64, drag.y as f64 * ppp as f64, size_px);
         } else {
-            let s = 0.008;
-            app.camera.orbit(-drag.x as f64 * s, -drag.y as f64 * s);
+            app.drag_orbit(drag);
         }
         app.camera_touched = true;
     }
-    if (response.dragged_by(egui::PointerButton::Middle) || response.dragged_by(egui::PointerButton::Secondary)) && drag != Vec2::ZERO {
+    if !cube_blocked && (response.dragged_by(egui::PointerButton::Middle) || response.dragged_by(egui::PointerButton::Secondary)) && drag != Vec2::ZERO {
+        app.direct_camera_input();
         app.camera.pan(drag.x as f64 * ppp as f64, drag.y as f64 * ppp as f64, size_px);
         app.camera_touched = true;
     }
 
+    let vp = app.viewport.as_mut().unwrap();
+    // --- render ---
+    if let Some(m) = &app.model {
+        let bb = vp.scene_bbox();
+        if !bb.is_empty() {
+            app.camera.auto_clip(bb);
+        }
+        let _ = m;
+    }
+    let render_ms = vp.render(&app.camera, &app.settings, size_px);
+    if app.frame_times.len() >= 60 {
+        app.frame_times.pop_front();
+    }
+    app.frame_times.push_back(render_ms);
+
     // --- picking ---
-    if response.clicked_by(egui::PointerButton::Primary)
+
+    if !cube_blocked && response.clicked_by(egui::PointerButton::Primary)
         && let Some(pos) = response.interact_pointer_pos() {
+            ui.ctx().request_repaint();
             let px = ((pos.x - rect.min.x) * ppp).round().max(0.0) as u32;
             let py = ((pos.y - rect.min.y) * ppp).round().max(0.0) as u32;
             let pick = vp.pick(px.min(size_px.0.saturating_sub(1)), py.min(size_px.1.saturating_sub(1)));
@@ -232,31 +265,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
                 }
             }
         }
-    if response.double_clicked()
+    if !cube_blocked && response.double_clicked()
         && let Some(sel) = &app.selection
             && let Some(m) = &app.model {
                 let bb = m.node_bbox[sel.node.0 as usize];
                 if !bb.is_empty() {
-                    app.camera.fit(bb);
+                    app.view_animation = None;
+                    app.camera.fit_aspect(bb, aspect);
                     app.camera_touched = true;
                 }
             }
 
-    // --- render ---
-    if let Some(m) = &app.model {
-        let bb = vp.scene_bbox();
-        if !bb.is_empty() {
-            app.camera.auto_clip(bb);
-        }
-        let _ = m;
-    }
-    let render_ms = vp.render(&app.camera, &app.settings, size_px);
-    if app.frame_times.len() >= 60 {
-        app.frame_times.pop_front();
-    }
-    app.frame_times.push_back(render_ms);
     // keep animating while the pointer interacts so the fps figure is meaningful
-    if response.dragged() || hovered && (zoom_delta - 1.0).abs() > 1e-4 {
+    if cube.action.is_some() || response.dragged() || hovered && (zoom_delta - 1.0).abs() > 1e-4 {
         ui.ctx().request_repaint();
     }
 

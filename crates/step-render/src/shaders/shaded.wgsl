@@ -28,8 +28,7 @@ fn vs_main(
     return out;
 }
 
-@fragment
-fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn shade(in: VsOut, front: bool) -> vec3<f32> {
     if (is_clipped(in.world_pos)) {
         discard;
     }
@@ -44,14 +43,26 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         }
     }
 
-    let v = normalize(globals.camera_pos.xyz - in.world_pos);
+    let v = select(normalize(globals.camera_pos.xyz - in.world_pos), -globals.view_dir.xyz, globals.view_dir.w > 0.5);
     let l = normalize(globals.light_dir.xyz);
-    let hemi = 0.5 + 0.5 * dot(n, globals.up_axis.xyz);
-    let ambient = mix(vec3<f32>(0.13, 0.13, 0.15), vec3<f32>(0.42, 0.44, 0.48), hemi);
-    let key = max(dot(n, l), 0.0) * 0.85;
+    let fill = max(dot(n, globals.fill_dir.xyz), 0.0) * 0.20;
+    let key = max(dot(n, l), 0.0) * 0.56;
     let h = normalize(l + v);
-    let spec = pow(max(dot(n, h), 0.0), 48.0) * 0.20;
+    let hf = normalize(globals.fill_dir.xyz + v);
+    let spec = pow(max(dot(n, h), 0.0), 24.0) * 0.12
+        + pow(max(dot(n, hf), 0.0), 16.0) * 0.04;
+    return base * (0.33 + key + fill) + vec3<f32>(spec);
+}
 
-    let rgb = base * (ambient + key) + vec3<f32>(spec);
-    return to_target(rgb, in.color.a * globals.params.x);
+@fragment
+fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if (in.color.a * globals.params.x < 1.0) { discard; }
+    return vec4<f32>(shade(in, front), 1.0);
+}
+
+@fragment
+fn fs_transparent(in: VsOut, @builtin(front_facing) front: bool) -> TransparentOut {
+    let alpha = in.color.a * globals.params.x;
+    if (alpha <= 0.0 || alpha >= 1.0) { discard; }
+    return transparent_output(shade(in, front), alpha, in.clip_pos.z);
 }

@@ -20,9 +20,11 @@ struct Globals {
     light_dir: vec4<f32>,
     // xyz = world up axis (hemisphere ambient).
     up_axis: vec4<f32>,
+    fill_dir: vec4<f32>,
+    view_dir: vec4<f32>,
     // x = output alpha multiplier (x-ray), y = edge depth bias in NDC, z/w unused.
     params: vec4<f32>,
-    // x = clip plane enabled, y = target is *Srgb, z = selection highlight enabled, w unused.
+    // x = clip plane enabled, y = target is *Srgb, z = selection highlight enabled, w = OIT active.
     modes: vec4<u32>,
 };
 
@@ -107,4 +109,20 @@ fn face_color(inst: Instance, face_index: u32) -> vec4<f32> {
         lin = mix(lin, globals.sel_color.rgb, globals.sel_color.a);
     }
     return vec4<f32>(lin, rgba.a);
+}
+
+// Weighted blended OIT: accumulation and remaining background coverage, in linear space.
+struct TransparentOut {
+    @location(0) accum: vec4<f32>,
+    @location(1) reveal: f32,
+};
+
+fn transparent_output(rgb: vec3<f32>, alpha: f32, depth: f32) -> TransparentOut {
+    let a = clamp(alpha, 0.0, 1.0);
+    // Bounded weights avoid half-float overflow even in deeply layered CAD assemblies.
+    let weight = clamp(pow(a + 0.01, 3.0) * 100.0 * pow(1.0 - depth * 0.9, 3.0), 0.01, 100.0);
+    var out: TransparentOut;
+    out.accum = vec4<f32>(rgb * a, a) * weight;
+    out.reveal = a;
+    return out;
 }

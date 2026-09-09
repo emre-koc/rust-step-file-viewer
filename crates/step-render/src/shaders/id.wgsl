@@ -7,6 +7,7 @@ struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) @interpolate(flat) ids: vec2<u32>,
+    @location(2) opacity: f32,
 };
 
 @vertex
@@ -22,13 +23,14 @@ fn vs_main(
     var out: VsOut;
     out.clip_pos = globals.view_proj * vec4<f32>(wp, 1.0);
     out.world_pos = wp;
+    out.opacity = face_color(inst, inst.face_base + face_slot).a;
     out.ids = vec2<u32>(inst.pick_id, inst.face_base + face_slot);
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<u32> {
-    if (is_clipped(in.world_pos)) {
+    if (is_clipped(in.world_pos) || in.opacity <= 0.0) {
         discard;
     }
     // `@builtin(position).z` in a fragment is already the 0..1 window depth.
