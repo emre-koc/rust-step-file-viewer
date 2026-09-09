@@ -2,3 +2,4 @@ target*/
 build/
 *.stpc
 .DS_Store
+MARKETING.md

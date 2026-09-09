@@ -359,7 +359,9 @@ fn apply_tree_action(app: &mut App, a: TreeAction) {
 
 pub fn props_panel(app: &mut App, root: &mut egui::Ui) {
     egui::Panel::right("props").default_size(300.0).min_size(200.0).show(root, |ui| {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        // A vertical-only scroll area expands horizontally to fit its content,
+        // forcing the panel back out when a grid or control exceeds the dragged width.
+        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
             ui.heading("Selection");
             enum PropAction {
                 Hide,
